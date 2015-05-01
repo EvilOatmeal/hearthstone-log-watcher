@@ -14,6 +14,7 @@ var debug = require('debug');
 var log = {
   main: debug('HLW'),
   gameStart: debug('HLW:game-start'),
+  turnStart: debug('HLW:turn-start'),
   zoneChange: debug('HLW:zone-change'),
   gameOver: debug('HLW:game-over')
 };
@@ -107,14 +108,39 @@ LogWatcher.prototype.parseBuffer = function (buffer, parserState) {
       self.emit('zone-change', data);
     }
 
+    // Track the turn number.
+    var turnNumberRegex = /GameEntity tag=TURN value=(\d+)$/;
+    if (turnNumberRegex.test(line)) {
+      var parts = turnNumberRegex.exec(line);
+      parserState.turn = parseInt(parts[1]);
+    }
+
+    // Check if a new turn started.
+    var turnStartRegex = /Entity=(.+) tag=TURN_START/;
+    if (turnStartRegex.test(line)) {
+      var parts = turnStartRegex.exec(line);
+      // This regex will match once for "GameEntity" when the mulligan turn starts.
+      // I wonder if a player could be named "GameEntity"?
+      if (parts[1] !== "GameEntity") {
+        var data = {
+          number: parserState.turn,
+          player: parserState.playersByName[parts[1]]
+        };
+        log.turnStart('Turn %s started, %s.', data.number, data.player.team);
+        self.emit('turn-start', data);
+      }
+    }
+
     // Check for players entering play and track their team IDs.
     var newPlayerRegex = /Entity=(.*) tag=TEAM_ID value=(.)$/;
     if (newPlayerRegex.test(line)) {
       var parts = newPlayerRegex.exec(line);
-      parserState.players.push({
+      var player = {
         name: parts[1],
         teamId: parseInt(parts[2])
-      });
+      };
+      parserState.players.push(player);
+      parserState.playersByName[player.name] = player;
     }
 
     // Look for mulligan status line that only shows for the local FRIENDLY player.
@@ -139,11 +165,7 @@ LogWatcher.prototype.parseBuffer = function (buffer, parserState) {
     if (gameOverRegex.test(line)) {
       var parts = gameOverRegex.exec(line);
       // Set the status for the appropriate player.
-      parserState.players.forEach(function (player) {
-        if (player.name === parts[1]) {
-          player.status = parts[2];
-        }
-      });
+      parserState.playersByName[parts[1]].status = parts[2];
       parserState.gameOverCount++;
       // When both players have lost, emit a game-over event.
       if (parserState.gameOverCount === 2) {
@@ -162,6 +184,8 @@ function ParserState() {
 
 ParserState.prototype.reset = function () {
   this.players = [];
+  this.playersByName = {};
+  this.turn = 0;
   this.gameOverCount = 0;
 };
 

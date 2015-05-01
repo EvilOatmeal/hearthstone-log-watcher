@@ -59,6 +59,8 @@ The second argument, `parserState`, is optional, and will be created for you if 
 If you want to use your own `parserState` instance it must have these properties:
 
 * **players**: `Array` (keeps track of the players)
+* **playersByName**: `Object` (keeps track of the same player objects that are in the `players` array)
+* **turn**: `Number` (keeps track of the number for the current turn)
 * **gameOverCount**: `Number` (keeps track of when players won/lost/tied to know when the game is over)
 * **reset**: `Function` (resets the `parserState` instance at the end of a game)
 
@@ -100,6 +102,27 @@ Example player object:
   teamId: 1,
   team: 'FRIENDLY',
   status: 'WON'
+}
+```
+
+### **turn-start**
+
+The `turn-start` event fires whenever a turn starts, except for the mulligan turn before turn 1.
+
+Callback Arguments:
+
+- **turn** - an object with the `number` and `player` properties. The player is the same player object as in the `game-start` event.
+
+Example turn object:
+
+```javascript
+{
+  number: 1,
+  player: {
+    name: 'Hologrid',
+    teamId: 1,
+    team: 'FRIENDLY'
+  }
 }
 ```
 
