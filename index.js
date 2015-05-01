@@ -15,6 +15,7 @@ var log = {
   main: debug('HLW'),
   gameStart: debug('HLW:game-start'),
   turnStart: debug('HLW:turn-start'),
+  mulliganStart: debug('HLW:mulligan-start'),
   zoneChange: debug('HLW:zone-change'),
   gameOver: debug('HLW:game-over')
 };
@@ -129,6 +130,13 @@ LogWatcher.prototype.parseBuffer = function (buffer, parserState) {
         log.turnStart('Turn %s started, %s.', data.number, data.player.team);
         self.emit('turn-start', data);
       }
+    }
+
+    // Check if the mulligan turn started.
+    var mulliganStartRegex = /Entity=GameEntity tag=TURN_START/;
+    if (mulliganStartRegex.test(line)) {
+      log.mulliganStart('Mulligan turn started.');
+      self.emit('mulligan-start');
     }
 
     // Check for players entering play and track their team IDs.

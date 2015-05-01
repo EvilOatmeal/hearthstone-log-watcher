@@ -105,6 +105,14 @@ Example player object:
 }
 ```
 
+### **mulligan-start**
+
+The `mulligan-start` event fires when the players get to make their mulligan choices.
+
+You will only be able to see the choices of the friendly player, and they will be the `zone-change` events before the first `turn-start` event.
+
+This event does not pass any arguments to the callback.
+
 ### **turn-start**
 
 The `turn-start` event fires whenever a turn starts, except for the mulligan turn before turn 1.
