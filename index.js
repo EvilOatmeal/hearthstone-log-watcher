@@ -92,6 +92,19 @@ LogWatcher.prototype.parseBuffer = function (buffer, parserState) {
     parserState = new ParserState;
   }
 
+  function getPlayerByName(name) {
+    // When playing the computer the player name is "The Inkeeper" when
+    // we find the player when it enters the game, but after that the hero
+    // name is used, so just assume that we're dealing with the opposing
+    // player if there is no player with the name we have.
+    return parserState.playersByName[name] || parserState.opposingPlayer;
+  }
+
+  function startTurn (data) {
+    log.turnStart('Turn %s started, %s player.', data.number, data.player.team);
+    self.emit('turn-start', data);
+  }
+
   // Iterate over each line in the buffer.
   buffer.toString().split(this.options.endOfLineChar).forEach(function (line) {
 
@@ -117,55 +130,87 @@ LogWatcher.prototype.parseBuffer = function (buffer, parserState) {
     }
 
     // Check if a new turn started.
-    var turnStartRegex = /Entity=(.+) tag=TURN_START/;
-    if (turnStartRegex.test(line)) {
-      var parts = turnStartRegex.exec(line);
-      // This regex will match once for "GameEntity" when the mulligan turn starts.
-      // I wonder if a player could be named "GameEntity"?
-      if (parts[1] !== "GameEntity") {
-        var data = {
+    //
+    // This can't be used for turn 1 because when the game handles the opposing
+    // player before the friendly player in the mulligan turn the line we look
+    // for will be printed before the cards swapped during the mulligan state
+    // have been printed. Turn 1 is started by the mulligan end check instead.
+    if (parserState.turn > 1) {
+      var turnStartRegex = /Entity=(.+) tag=TURN_START/;
+      if (turnStartRegex.test(line)) {
+        var parts = turnStartRegex.exec(line);
+        //console.log(lineIndex, line);
+        startTurn({
           number: parserState.turn,
-          player: parserState.playersByName[parts[1]]
-        };
-        log.turnStart('Turn %s started, %s.', data.number, data.player.team);
-        self.emit('turn-start', data);
+          player: getPlayerByName(parts[1])
+        });
       }
     }
 
-    // Check if the mulligan turn started.
-    var mulliganStartRegex = /Entity=GameEntity tag=TURN_START/;
-    if (mulliganStartRegex.test(line)) {
-      log.mulliganStart('Mulligan turn started.');
-      self.emit('mulligan-start');
-    }
+    if (parserState.turn === 1) {
+      // Check if the mulligan turn started.
+      var mulliganStartRegex = /Entity=GameEntity tag=TURN_START/;
+      if (mulliganStartRegex.test(line)) {
+        log.mulliganStart('Mulligan turn started.');
+        self.emit('mulligan-start');
+      }
 
-    // Check for players entering play and track their team IDs.
-    var newPlayerRegex = /Entity=(.*) tag=TEAM_ID value=(.)$/;
-    if (newPlayerRegex.test(line)) {
-      var parts = newPlayerRegex.exec(line);
-      var player = {
-        name: parts[1],
-        teamId: parseInt(parts[2])
-      };
-      parserState.players.push(player);
-      parserState.playersByName[player.name] = player;
-    }
-
-    // Look for mulligan status line that only shows for the local FRIENDLY player.
-    // Compare the ID to the team ID and set player zones appropriately.
-    var mulliganCountRegex = /id=(\d) ChoiceType=MULLIGAN Cancelable=False CountMin=0 CountMax=\d$/;
-    if (mulliganCountRegex.test(line)) {
-      var parts = mulliganCountRegex.exec(line);
-      var teamId = parseInt(parts[1]);
-      parserState.players.forEach(function (player) {
-        if (teamId === player.teamId) {
-          player.team = 'FRIENDLY';
-        } else {
-          player.team = 'OPPOSING';
+      // Check if the mulligan turn ended and start turn 1.
+      if (parserState.friendlyPlayer) {
+        var mulliganEndRegex = new RegExp('name=' + parserState.friendlyPlayer.name + '\\] tag=MULLIGAN_STATE value=WAITING');
+        if (mulliganEndRegex.test(line)) {
+          startTurn({
+            number: 1,
+            player: parserState.firstPlayer
+          });
         }
-      });
-      log.gameStart('A game has started.')
-      self.emit('game-start', parserState.players);
+      }
+    }
+
+    if (parserState.turn < 2) {
+      // Check for players entering play.
+      var newPlayerRegex = /Entity=(.*) tag=PLAYSTATE value=PLAYING$/;
+      if (newPlayerRegex.test(line)) {
+        var parts = newPlayerRegex.exec(line);
+        var player = {
+          name: parts[1]
+        };
+        parserState.players.push(player);
+        parserState.playersByName[player.name] = player;
+      }
+
+      // Find players team IDs.
+      var playerTeamIdRegex = /Entity=(.*) tag=TEAM_ID value=(.)$/;
+      if (playerTeamIdRegex.test(line)) {
+        var parts = playerTeamIdRegex.exec(line);
+        getPlayerByName(parts[1]).teamId = parseInt(parts[2]);
+      }
+
+      // Find the player that goes first.
+      var firstPlayerRegex = /Entity=(.*) tag=FIRST_PLAYER value=1$/;
+      if (firstPlayerRegex.test(line)) {
+        var parts = firstPlayerRegex.exec(line);
+        parserState.firstPlayer = getPlayerByName(parts[1]);
+      }
+
+      // Look for mulligan status line that only shows for the local FRIENDLY player.
+      // Compare the ID to the team ID and set player zones appropriately.
+      var mulliganCountRegex = /id=(\d) ChoiceType=MULLIGAN Cancelable=False CountMin=0 CountMax=\d$/;
+      if (mulliganCountRegex.test(line)) {
+        var parts = mulliganCountRegex.exec(line);
+        var teamId = parseInt(parts[1]);
+        parserState.players.forEach(function (player) {
+          if (teamId === player.teamId) {
+            player.team = 'FRIENDLY';
+            parserState.friendlyPlayer = player;
+          } else {
+            player.team = 'OPPOSING';
+            parserState.opposingPlayer = player;
+          }
+        });
+        log.gameStart('A game has started.')
+        self.emit('game-start', parserState.players);
+      }
     }
 
     // Check if the game is over.
@@ -173,7 +218,7 @@ LogWatcher.prototype.parseBuffer = function (buffer, parserState) {
     if (gameOverRegex.test(line)) {
       var parts = gameOverRegex.exec(line);
       // Set the status for the appropriate player.
-      parserState.playersByName[parts[1]].status = parts[2];
+      getPlayerByName(parts[1]).status = parts[2];
       parserState.gameOverCount++;
       // When both players have lost, emit a game-over event.
       if (parserState.gameOverCount === 2) {
@@ -193,6 +238,9 @@ function ParserState() {
 ParserState.prototype.reset = function () {
   this.players = [];
   this.playersByName = {};
+  this.friendlyPlayer = null;
+  this.opposingPlayer = null;
+  this.firstPlayer = null;
   this.turn = 0;
   this.gameOverCount = 0;
 };
